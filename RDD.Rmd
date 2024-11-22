@@ -1,0 +1,149 @@
+---
+title: "Untitled"
+author: "赵善睿"
+date: "2024/11/22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+library(rdrobust)
+library(rddensity)
+library(magrittr)
+library(ggplot2)
+library(tidyverse)
+library(stargazer)
+
+data(rdrobust_RDsenate)
+head(rdrobust_RDsenate)
+
+
+#检验驱动变量是否受到操控
+#驱动变量的直方图，若大致呈现光滑曲线，无明显的断点，说明不受到操控。
+hist(x = rdrobust_RDsenate$margin, breaks = 200, col = 'black',
+     xlab = 'margin', ylab = 'Frequance', main = 'Histogram of Rating Variable')
+#或者使用也可以利用rddenstiy包中的rddenstiy函数画密度图，
+#输出结果中，最下面一行robust的p值大于0.05，就说明驱动变量未受到操纵。
+rdplotdensity(rddensity(rdrobust_RDsenate$margin), X = rdrobust_RDsenate$margin)
+
+#画驱动变量与干预的散点图，判断为sharp还是fuzzy类型
+#可见本例断点前后干预率0-1，基本可判断为sharp类型
+rdrobust_RDsenate$treatment <- ifelse(rdrobust_RDsenate$margin < 0, 0, 1)
+rdrobust_RDsenate$color <- ifelse(rdrobust_RDsenate$margin < 0, 'blue', 'red')
+
+plot(x = rdrobust_RDsenate$margin, y = rdrobust_RDsenate$treatment, col = rdrobust_RDsenate$color,
+     type = 'p', pch = 16, xlab = 'Margin', ylab = 'Treatment',
+     main = 'Relationship between rating variable and treatment')
+
+#画驱动变量与结果变量的关系图
+#散点图初步判定关系
+plot(x = rdrobust_RDsenate$margin, y = rdrobust_RDsenate$vote, type = 'p',
+     col = rdrobust_RDsenate$color, pch = 16, cex = 0.8, xlab = 'Margin', ylab = 'Vote')
+
+#拟合图
+#将驱动变量分成若干宽度(width)相等的区间(bin)，但不能存在骑跨断点，断点两侧的区间数量可不相等
+#选择合适的区间和带宽。可以采用rdrobust包中的rdplot函数进行判断
+bins <- rdplot(rdrobust_RDsenate$vote, rdrobust_RDsenate$margin, c = 0, p = 4,
+               nbins = c(20, 20), binselect = 'esmv', kernel = 'uniform')
+summary(bins)
+
+#进一步缩小样本范围（-50，50），提升拟合效果
+rdrobust_RDsenate2<-subset(rdrobust_RDsenate,
+                           rdrobust_RDsenate$margin>-50&rdrobust_RDsenate$margin<50,
+                           select = margin:vote)
+rdplot(rdrobust_RDsenate2$vote, rdrobust_RDsenate2$margin, c = 0, p = 4,nbins = c(20, 20),
+       title="四次型拟合",ci=95)
+
+#全局参数估计
+rdrobust_RDsenate$margin_del <- rdrobust_RDsenate$margin - 0
+# linear
+fit_1 <- lm(vote ~ margin_del + treatment, data = rdrobust_RDsenate) 
+# linear interaction
+fit_2 <- lm(vote ~ margin_del * treatment, data = rdrobust_RDsenate) 
+# quadratic
+fit_3 <- lm(vote ~ margin_del + I(margin_del ^ 2) + treatment, data = rdrobust_RDsenate) 
+# quadratic interaction
+fit_4 <- lm(vote ~ (margin_del + I(margin_del ^ 2)) * treatment, data = rdrobust_RDsenate) 
+# cubic
+fit_5 <- lm(vote ~ margin_del + I(margin_del ^ 2) + I(margin_del ^ 3) + treatment, data = rdrobust_RDsenate)
+# cubic interaction
+fit_6 <- lm(vote ~ (margin_del + I(margin_del ^ 2) + I(margin_del ^ 3)) * treatment, data = rdrobust_RDsenate) 
+
+stargazer::stargazer(fit_1, fit_2, fit_3, fit_4, fit_5, fit_6, type = 'html', style = 'all')#输出表格形式的结果
+#比较AIC或者回归残差，较小者模型较优。
+AIC(fit_1, fit_2, fit_3, fit_4, fit_5, fit_6)
+
+#局部非参数估计
+#利用rdrobust包的rdrobust函数进行拟合。
+#局部估计可直接利用rdrobust函数中的bdselect参数指定选择最优带宽的方法。
+#带宽选择还可以先利用rdbwselect函数计算出最优带宽，然后用rdrobust函数中的h参数手动指定左右的带宽。
+
+#rdbwselect方法
+#结果中前缀mse更适用于进行点估计的带宽选择，而cer更适合区间估计的带宽选择。后缀rd指两侧区间相等，而two则不相等
+#结果中h即为选择的左右最优带宽，而b给出的是用来进行敏感性分析时应该考虑的带宽。
+rdbwselect(y = rdrobust_RDsenate$vote, x = rdrobust_RDsenate$margin, all = TRUE) %>% summary()
+#拟合，c用来指定cut-point，p用来指定局部加权回归的多项式幂次，kernel为选择的核函数
+loc_fit_1 <- rdrobust(rdrobust_RDsenate$vote, rdrobust_RDsenate$margin, c = 0, p = 1,
+                      kernel = 'triangular', bwselect = 'mserd',h=17.754)# 如果有混杂因素需要控制,可以用covs = c('var1', 'var2')
+loc_fit_2 <- rdrobust(rdrobust_RDsenate$vote, rdrobust_RDsenate$margin, c = 0, p = 2,
+                      kernel = 'triangular', bwselect = 'msetwo',h=17.754)
+
+summary(loc_fit_1)
+summary(loc_fit_2)#结果中coef即为效应值
+
+#对cut-point的敏感性分析
+#选择一个虚拟的断点用来替换真正的断点，但是真实的干预情况不改变。
+#虚拟断点选择并没有明确的标准，通常在真实断点的附近，左右对称选取即可
+sen_cut_1 <- rdrobust(rdrobust_RDsenate$vote, rdrobust_RDsenate$margin, c = 5, p = 2,
+                      kernel = 'triangular', bwselect = 'certwo') # 除c意外的其他参数应该与前面分析保持一致
+sen_cut_2 <- rdrobust(rdrobust_RDsenate$vote, rdrobust_RDsenate$margin, c = -5, p = 2,
+                      kernel = 'triangular', bwselect = 'certwo') # 除c意外的其他参数应该与前面分析保持一致
+
+summary(sen_cut_1)
+summary(sen_cut_2)
+
+#对cut-point附近个体的敏感性分析
+#对称剔除真实断点左右一定较小范围内的个体。
+#关于范围的大小同样没有明确的标准，通常选取多个范围比较即可。
+rdrobust_RD_hole_1 <- subset(rdrobust_RDsenate, abs(margin) > 0.3)
+rdrobust_RD_hole_2 <- subset(rdrobust_RDsenate, abs(margin) > 0.4)
+sen_hole_1 <- rdrobust(rdrobust_RD_hole_1$vote, rdrobust_RD_hole_1$margin, c = 0, p = 2,
+                       kernel = 'triangular', bwselect = 'msetwo') # 除c意外的其他参数应该与前面分析保持一致
+sen_hole_2 <- rdrobust(rdrobust_RD_hole_2$vote, rdrobust_RD_hole_2$margin, c = 0, p = 2,
+                       kernel = 'triangular', bwselect = 'msetwo') # 除c意外的其他参数应该与前面分析保持一致
+summary(sen_hole_1)
+summary(sen_hole_2)
+
+#对带宽bandwidth的敏感性分析
+#更换不同的带宽即可
+loc_fit_3 <- rdrobust(rdrobust_RDsenate$vote, rdrobust_RDsenate$margin, c = 0, p = 2,
+                      kernel = 'triangular', bwselect = 'mserd',h=28.028)# 如果有混杂因素需要控制,可以用covs = c('var1', 'var2')
+loc_fit_4 <- rdrobust(rdrobust_RDsenate$vote, rdrobust_RDsenate$margin, c = 0, p = 2,
+                      kernel = 'triangular', bwselect = 'msetwo',h=20.086)
+
+summary(loc_fit_3)
+summary(loc_fit_4)
+```
